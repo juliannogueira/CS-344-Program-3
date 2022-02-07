@@ -17,6 +17,9 @@ void runShell(void) {
     initShell(shell, MAX_LENGTH);
 
     while (*(shell->isRunning)) {
+        if (*(shell->isRunningBackgroundProcess)) {
+            checkBackgroundPids(shell);
+        }
         command = malloc(sizeof(struct Command));
         initCommand(command);
         getUserInput(prompt, buffer, MAX_LENGTH);
@@ -24,6 +27,7 @@ void runShell(void) {
         if (command->wordc != NULL) {
             addNullToCommandVector(command);
             setIsBuiltinCommand(command);
+            setIsBackgroundCommand(command);
             if (*(command->isStdinRedirection)) {
                 redirectStdin(command, shell);
             }
@@ -33,7 +37,11 @@ void runShell(void) {
             if (*(command->isBuiltin)) {
                 runBuiltinCommand(command, shell);
             } else {
-                runExternalCommand(command, shell);
+                if (*(command->isBackground)) {
+                    runExternalCommandBackground(command, shell);
+                } else {
+                    runExternalCommandForeground(command, shell);
+                }
             }
             closeFiles(command);
             resetOutput(shell);
@@ -53,18 +61,23 @@ void runShell(void) {
  */
 void initShell(struct Shell *shell, int MAX_LENGTH) {
     char *temp = getenv("HOME");
+    shell->backgroundPids = malloc(sizeof(int*));
+    shell->backgroundPidCount = malloc(sizeof(int));
     shell->MAX_LENGTH = malloc(sizeof(int));
     shell->STDIN_FD = malloc(sizeof(int));
     shell->STDOUT_FD = malloc(sizeof(int));
     shell->isRunning = malloc(sizeof(int));
+    shell->isRunningBackgroundProcess = malloc(sizeof(int));
     shell->status = malloc(sizeof(int));
     shell->pid = malloc(sizeof(int));
     shell->cwd = malloc(sizeof(char) * MAX_LENGTH);
     shell->HOME = malloc(sizeof(char) * MAX_LENGTH);
+    *(shell->backgroundPidCount) = 0;
     *(shell->MAX_LENGTH) = MAX_LENGTH;
     *(shell->STDIN_FD) = dup(STDIN_FILENO);
     *(shell->STDOUT_FD) = dup(STDOUT_FILENO);
     *(shell->isRunning) = 1;
+    *(shell->isRunningBackgroundProcess) = 0;
     *(shell->status) = 0;
     *(shell->pid) = getpid();
     shell->cwd = getcwd(shell->cwd, MAX_LENGTH);
@@ -75,15 +88,62 @@ void initShell(struct Shell *shell, int MAX_LENGTH) {
  * Free all memory in a shell struct.
  */
 void freeShell(struct Shell *shell) {
+    for (int i = 0; i < *(shell->backgroundPidCount); i++) {
+        free(*(shell->backgroundPids + i));
+    }
+    free(shell->backgroundPids);
+    free(shell->backgroundPidCount);
     free(shell->MAX_LENGTH);
     free(shell->STDIN_FD);
     free(shell->STDOUT_FD);
     free(shell->isRunning);
+    free(shell->isRunningBackgroundProcess);
     free(shell->status);
     free(shell->pid);
     free(shell->cwd);
     free(shell->HOME);
     free(shell);
+}
+
+/*
+ *
+ */
+void checkBackgroundPids(struct Shell *shell) {
+    int temp[*(shell->backgroundPidCount)];
+    int pid = 0;
+    int status = 0;
+    int count = 0;
+    int index = 0;
+
+    count = *(shell->backgroundPidCount);
+
+    for (int i = 0; i < count; i++) {
+        pid = waitpid(*(*(shell->backgroundPids + i)), &status, WNOHANG);
+        if (pid) {
+            *(shell->status) = status;
+            *(shell->backgroundPidCount) -= 1;
+            printf("background pid %d returned with signal %d\n", pid, *(shell->status));
+            free(*(shell->backgroundPids + i));
+        } else {
+            temp[index] = *(*(shell->backgroundPids + i));
+            free(*(shell->backgroundPids + i));
+            index++;
+        }
+    }
+
+    if (index) {
+        shell->backgroundPids = realloc(shell->backgroundPids, sizeof(int*) * index);
+        for (int i = 0; i < index; i++) {
+            *(shell->backgroundPids + i) = malloc(sizeof(int));
+            *(*(shell->backgroundPids + i)) = temp[i];
+        }
+    } else {
+        shell->backgroundPids = realloc(shell->backgroundPids, sizeof(int*));
+    }
+
+    if (*(shell->backgroundPidCount) == 0) {
+        *(shell->isRunningBackgroundProcess) = 0;
+    }
 }
 
 /*
@@ -148,6 +208,16 @@ void setIsBuiltinCommand(struct Command *command) {
             *(command->isBuiltin) = 1;
             break;
         }
+    }
+}
+
+/*
+ *
+ */
+void setIsBackgroundCommand(struct Command *command) {
+    if (isEqualString(*(command->argv + *(command->argc) - 2), "&")) {
+        *(command->argv + *(command->argc) - 2) = NULL;
+        *(command->isBackground) = 1;
     }
 }
 
@@ -310,7 +380,7 @@ char *parseExpansion(char *buffer, struct Shell *shell) {
             resultLength += counter;
             result = realloc(result, sizeof(char) * (resultLength + 1));
             for (int k = 0; k < counter; k++) {
-                *(result + index) = *(buffer + i + k - counter);
+                *(result + index) = *(buffer + i + k + 1 - counter);
                 index++;
             }
             *(result + index) = '\0';
@@ -353,6 +423,8 @@ void saveCommand(char *buffer, struct Command *command, struct Shell *shell, int
         command->wordc = malloc(sizeof(int));
         command->argv = malloc(sizeof(char*));
         command->wordv = malloc(sizeof(char*));
+        *(command->isBuiltin) = 0;
+        *(command->isBackground) = 0;
         *(command->isStdinRedirection) = 0;
         *(command->isStdoutRedirection) = 0;
         *(command->stdinFileArg) = -1;
@@ -428,6 +500,13 @@ void runBuiltinCommand(struct Command *command, struct Shell *shell) {
  */
 void runBuiltinCommandExit(struct Command *command, struct Shell *shell) {
     *(shell->isRunning) = 0;
+    printf("pids running in background: %d\n", *(shell->backgroundPidCount));
+    for (int i = 0; i < *(shell->backgroundPidCount); i++) {
+        printf("killing pid %d\n", *(*(shell->backgroundPids + i)));
+        if (*(*(shell->backgroundPids + i))) {
+            kill(*(*(shell->backgroundPids + i)), SIGKILL);
+        }
+    }
 }
 
 /*
@@ -464,7 +543,7 @@ void runBuiltinCommandStatus(struct Command *command, struct Shell *shell) {
 /*
  *
  */
-void runExternalCommand(struct Command *command, struct Shell *shell) {
+void runExternalCommandForeground(struct Command *command, struct Shell *shell) {
     pid_t pid = fork();
 
     switch (pid) {
@@ -480,6 +559,52 @@ void runExternalCommand(struct Command *command, struct Shell *shell) {
             break;
         default:
             pid = waitpid(pid, shell->status, 0);
+            break;
+    }
+}
+
+/*
+ *
+ */
+void runExternalCommandBackground(struct Command *command, struct Shell *shell) {
+    int count = *(shell->backgroundPidCount) + 1;
+    int temp[count];
+    pid_t pid = fork();
+
+    switch (pid) {
+        case -1:
+            perror("fork()");
+            break;
+        case 0:
+            execvp(*(command->argv), command->argv);
+            perror("execvp()");
+            freeCommand(command);
+            freeShell(shell);
+            kill(getpid(), SIGKILL);
+            break;
+        default:
+            for (int i = 0; i < count - 1; i++) {
+                temp[i] = *(*(shell->backgroundPids + i));
+                free(*(shell->backgroundPids + i));
+            }
+
+            shell->backgroundPids = realloc(shell->backgroundPids, sizeof(int*) * count);
+            *(shell->backgroundPidCount) = count;
+
+            for (int i = 0; i < count; i++) {
+                *(shell->backgroundPids + i) = malloc(sizeof(int));
+
+                if (i == count - 1) {
+                    *(*(shell->backgroundPids + i)) = pid;
+                } else {
+                    *(*(shell->backgroundPids + i)) = temp[i];
+                }
+            }
+
+            printf("background pid is %d\n", pid);
+            fflush(stdout);
+
+            *(shell->isRunningBackgroundProcess) = 1;
             break;
     }
 }

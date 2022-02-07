@@ -21,4 +21,4 @@ run:
 	./$(TARGET)
 
 check:
-	valgrind --leak-check=yes ./$(TARGET)
+	valgrind --leak-check=yes -s ./$(TARGET)

@@ -12,10 +12,13 @@
  */
 
 struct Shell {
+    int **backgroundPids;
+    int *backgroundPidCount;
     int *MAX_LENGTH;
     int *STDIN_FD;
     int *STDOUT_FD;
     int *isRunning;
+    int *isRunningBackgroundProcess;
     int *status;
     int *pid;
     char *cwd;
@@ -47,6 +50,8 @@ void initShell(struct Shell *shell, int MAX_LENGTH);
 
 void freeShell(struct Shell *shell);
 
+void checkBackgroundPids(struct Shell *shell);
+
 void redirectStdin(struct Command *command, struct Shell *shell);
 
 void redirectStdout(struct Command *command, struct Shell *shell);
@@ -56,6 +61,8 @@ void closeFiles(struct Command *command);
 void resetOutput(struct Shell *shell);
 
 void setIsBuiltinCommand(struct Command *command);
+
+void setIsBackgroundCommand(struct Command *command);
 
 /*
  * The following functions relate to parsing and assigning commands.
@@ -87,6 +94,8 @@ void runBuiltinCommandCd(struct Command *command, struct Shell *shell);
 
 void runBuiltinCommandStatus(struct Command *command, struct Shell *shell);
 
-void runExternalCommand(struct Command *command, struct Shell *shell);
+void runExternalCommandForeground(struct Command *command, struct Shell *shell);
+
+void runExternalCommandBackground(struct Command *command, struct Shell *shell);
 
 #endif
