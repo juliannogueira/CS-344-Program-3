@@ -12,6 +12,17 @@ int stringLength(char *str) {
 }
 
 /*
+ * Copy the contents of source into dest.
+ */
+void copyString(char *source, char *dest) {
+    int length = stringLength(source);
+    for (int i = 0; i < length; i++) {
+        *(dest + i) = *(source + i);
+    }
+    *(dest + length) = '\0'; 
+}
+
+/*
  * Compare two null-terminated character arrays.
  *
  * If the character arrays contain the same contents, return 1. Otherwise,
@@ -117,4 +128,18 @@ int parseString(char *pattern, char *string) {
         }
     }
     return 0;
+}
+
+/*
+ * Check if the passed file can be opened.
+ */
+int isValidFile(char *filename, char *mode) {
+    FILE *fp;
+    fp = fopen(filename, mode);
+    if (fp != NULL) {
+        fclose(fp);
+        return 1;
+    } else {
+        return 0;
+    }
 }
