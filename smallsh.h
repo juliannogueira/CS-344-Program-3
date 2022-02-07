@@ -17,6 +17,7 @@ struct Shell {
     int *STDOUT_FD;
     int *isRunning;
     int *status;
+    int *pid;
     char *cwd;
     char *HOME;
 };
@@ -64,9 +65,11 @@ void initCommand(struct Command *command);
 
 void printCommand(struct Command *command);
 
-void parseCommand(char *buffer, struct Command *command);
+void parseCommand(char *buffer, struct Command *command, struct Shell *shell);
 
-void saveCommand(char *buffer, struct Command *command, int index, int count, int wordc, int argc, int isCommand);
+char *parseExpansion(char *buffer, struct Shell *shell);
+
+void saveCommand(char *buffer, struct Command *command, struct Shell *shell, int index, int count, int wordc, int argc, int isCommand);
 
 void addNullToCommandVector(struct Command *command);
 

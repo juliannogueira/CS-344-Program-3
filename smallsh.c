@@ -20,7 +20,7 @@ void runShell(void) {
         command = malloc(sizeof(struct Command));
         initCommand(command);
         getUserInput(prompt, buffer, MAX_LENGTH);
-        parseCommand(buffer, command);
+        parseCommand(buffer, command, shell);
         if (command->wordc != NULL) {
             addNullToCommandVector(command);
             setIsBuiltinCommand(command);
@@ -58,6 +58,7 @@ void initShell(struct Shell *shell, int MAX_LENGTH) {
     shell->STDOUT_FD = malloc(sizeof(int));
     shell->isRunning = malloc(sizeof(int));
     shell->status = malloc(sizeof(int));
+    shell->pid = malloc(sizeof(int));
     shell->cwd = malloc(sizeof(char) * MAX_LENGTH);
     shell->HOME = malloc(sizeof(char) * MAX_LENGTH);
     *(shell->MAX_LENGTH) = MAX_LENGTH;
@@ -65,6 +66,7 @@ void initShell(struct Shell *shell, int MAX_LENGTH) {
     *(shell->STDOUT_FD) = dup(STDOUT_FILENO);
     *(shell->isRunning) = 1;
     *(shell->status) = 0;
+    *(shell->pid) = getpid();
     shell->cwd = getcwd(shell->cwd, MAX_LENGTH);
     copyString(temp, shell->HOME);
 }
@@ -78,6 +80,7 @@ void freeShell(struct Shell *shell) {
     free(shell->STDOUT_FD);
     free(shell->isRunning);
     free(shell->status);
+    free(shell->pid);
     free(shell->cwd);
     free(shell->HOME);
     free(shell);
@@ -188,7 +191,7 @@ void printCommand(struct Command *command) {
  * 
  * For each command, call saveCommand() to store it to the command struct.
  */
-void parseCommand(char *buffer, struct Command *command) {
+void parseCommand(char *buffer, struct Command *command, struct Shell *shell) {
     int length = stringLength(buffer);
     int wordc = 0;
     int argc = 0;
@@ -234,7 +237,7 @@ void parseCommand(char *buffer, struct Command *command) {
                 isCommand = 1;
             }
             wordc++;
-            saveCommand(buffer, command, index, count, wordc, argc, isCommand);
+            saveCommand(buffer, command, shell, index, count, wordc, argc, isCommand);
             count = 0;
             isWord = 0;
             isCommand = 0;
@@ -245,15 +248,100 @@ void parseCommand(char *buffer, struct Command *command) {
 /*
  *
  */
-void saveCommand(char *buffer, struct Command *command, int index, int count, int wordc, int argc, int isCommand) {
-    char *str = malloc(sizeof(char) * (count + 1));
+char *parseExpansion(char *buffer, struct Shell *shell) {
+    int hasExpanded = 0;
+    int isExpansion = 0;
+    int patternLength = 0;
+    int pidStringLength = 0;
+    int resultLength = 0;
+    int index = 0;
+    int counter = 0;
+    int expandedChars = 0;
+    char *pattern = "$$";
+    char *pidString = integerToString(*(shell->pid));
+    char *result = malloc(sizeof(char));
 
-    for (int i = 0; i < count; i++) {
-        *(str + i) = *(buffer + index + i);
+    patternLength = stringLength(pattern);
+    pidStringLength = stringLength(pidString);
+    resultLength = stringLength(buffer);
+
+    for (int i = 0; i < stringLength(buffer); i++) {
+        if (expandedChars == patternLength - 1) {
+            expandedChars = 0;
+        } else if (expandedChars > 0) {
+            expandedChars++;
+        } else if (*(pattern + 0) == *(buffer + i)) {
+            for (int j = 0; j < stringLength(pattern); j++) {
+                if ((i + stringLength(pattern)) > stringLength(buffer)) {
+                    counter++;
+                    break;
+                } else if (*(pattern + j) != *(buffer + i + j)) {
+                    counter++;
+                    break;
+                } else if (j == (stringLength(pattern) - 1)) {
+                    isExpansion = 1;
+                    break;
+                }
+            }
+        } else {
+            counter++;
+        }
+
+        if (isExpansion) {
+            resultLength += counter;
+            resultLength += pidStringLength;
+            result = realloc(result, sizeof(char) * (resultLength + 1));
+            for (int k = 0; k < counter; k++) {
+                *(result + index) = *(buffer + i + k - counter);
+                index++;
+            }
+            for (int l = 0; l < pidStringLength; l++) {
+                *(result + index) = *(pidString + l);
+                index++;
+            }
+            *(result + index) = '\0';
+            hasExpanded = 1;
+            expandedChars = 1;
+            isExpansion = 0;
+            counter = 0;
+        }
+
+        if (hasExpanded && i == stringLength(buffer) - 1) {
+            resultLength += counter;
+            result = realloc(result, sizeof(char) * (resultLength + 1));
+            for (int k = 0; k < counter; k++) {
+                *(result + index) = *(buffer + i + k - counter);
+                index++;
+            }
+            *(result + index) = '\0';
+        }
     }
 
-    *(str + count) = '\0';
-    
+    if (!hasExpanded) {
+        result = realloc(result, sizeof(char) * (stringLength(buffer) + 1));
+        copyString(buffer, result);
+    }
+
+    free(pidString);
+
+    return result;
+}
+
+/*
+ *
+ */
+void saveCommand(char *buffer, struct Command *command, struct Shell *shell, int index, int count, int wordc, int argc, int isCommand) {
+    char *str;
+    char *temp = malloc(sizeof(char) * (count + 1));
+
+    for (int i = 0; i < count; i++) {
+        *(temp + i) = *(buffer + index + i);
+    }
+
+    *(temp + count) = '\0';
+
+    str = parseExpansion(temp, shell);
+
     if (wordc == 1) {
         command->isBuiltin = malloc(sizeof(int));
         command->isBackground = malloc(sizeof(int));
@@ -280,6 +368,8 @@ void saveCommand(char *buffer, struct Command *command, int index, int count, in
     command->wordv = realloc(command->wordv, sizeof(char*) * wordc);
     *(command->wordc) = wordc;
     *(command->wordv + wordc - 1) = str;
+
+    free(temp);
 }
 
 /*
