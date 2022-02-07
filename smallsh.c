@@ -21,14 +21,22 @@ void runShell(void) {
         initCommand(command);
         getUserInput(prompt, buffer, MAX_LENGTH);
         parseCommand(buffer, command);
-        if (command->argc != NULL) {
+        if (command->wordc != NULL) {
             addNullToCommandVector(command);
             setIsBuiltinCommand(command);
+            if (*(command->isStdinRedirection)) {
+                redirectStdin(command, shell);
+            }
+            if (*(command->isStdoutRedirection)) {
+                redirectStdout(command, shell);
+            }
             if (*(command->isBuiltin)) {
                 runBuiltinCommand(command, shell);
             } else {
                 runExternalCommand(command, shell);
             }
+            closeFiles(command);
+            resetOutput(shell);
             // printCommand(command);
             // printf("cwd: %s\n", shell->cwd);
         }
@@ -46,11 +54,15 @@ void runShell(void) {
 void initShell(struct Shell *shell, int MAX_LENGTH) {
     char *temp = getenv("HOME");
     shell->MAX_LENGTH = malloc(sizeof(int));
+    shell->STDIN_FD = malloc(sizeof(int));
+    shell->STDOUT_FD = malloc(sizeof(int));
     shell->isRunning = malloc(sizeof(int));
     shell->status = malloc(sizeof(int));
     shell->cwd = malloc(sizeof(char) * MAX_LENGTH);
     shell->HOME = malloc(sizeof(char) * MAX_LENGTH);
     *(shell->MAX_LENGTH) = MAX_LENGTH;
+    *(shell->STDIN_FD) = dup(STDIN_FILENO);
+    *(shell->STDOUT_FD) = dup(STDOUT_FILENO);
     *(shell->isRunning) = 1;
     *(shell->status) = 0;
     shell->cwd = getcwd(shell->cwd, MAX_LENGTH);
@@ -62,6 +74,8 @@ void initShell(struct Shell *shell, int MAX_LENGTH) {
  */
 void freeShell(struct Shell *shell) {
     free(shell->MAX_LENGTH);
+    free(shell->STDIN_FD);
+    free(shell->STDOUT_FD);
     free(shell->isRunning);
     free(shell->status);
     free(shell->cwd);
@@ -103,10 +117,13 @@ void printCommand(struct Command *command) {
  */
 void parseCommand(char *buffer, struct Command *command) {
     int length = stringLength(buffer);
+    int wordc = 0;
     int argc = 0;
     int index = 0;
     int count = 0;
+    int isWord = 0;
     int isCommand = 0;
+    int isExpectingFile = 0;
     char ch = '\0';
 
     for (int i = 0; i < length; i++) {
@@ -121,27 +138,32 @@ void parseCommand(char *buffer, struct Command *command) {
                 index = i;
             }
             if (i == length - 1) {
-                isCommand = 1;
+                isWord = 1;
             }
             count++;
         } else if (ch == ' ' && count > 0) {
-            isCommand = 1;
+            isWord = 1;
         }
 
-        if (isCommand) {
-            if (ch == '<' && argc > 0 && count == 1) {
+        if (isWord) {
+            if (isExpectingFile) {
+                isExpectingFile = 0;
+            } else if (*(buffer + i - 1) == '<' && argc > 0 && count == 1) {
                 *(command->isStdinRedirection) = 1;
-                *(command->stdinFile) = argc + 1;
-                break;
-            } else if (ch == '>' && argc > 0 && count == 1) {
+                *(command->stdinFileArg) = wordc + 1;
+                isExpectingFile = 1;
+            } else if (*(buffer + i - 1) == '>' && argc > 0 && count == 1) {
                 *(command->isStdoutRedirection) = 1;
-                *(command->stdoutFile) = argc + 1;
-                break;
+                *(command->stdoutFileArg) = wordc + 1;
+                isExpectingFile = 1;
             } else {
                 argc++;
-                saveCommand(buffer, command, index, count, argc);
+                isCommand = 1;
             }
+            wordc++;
+            saveCommand(buffer, command, index, count, wordc, argc, isCommand);
             count = 0;
+            isWord = 0;
             isCommand = 0;
         }
     }
@@ -150,7 +172,7 @@ void parseCommand(char *buffer, struct Command *command) {
 /*
  *
  */
-void saveCommand(char *buffer, struct Command *command, int index, int count, int argc) {
+void saveCommand(char *buffer, struct Command *command, int index, int count, int wordc, int argc, int isCommand) {
     char *str = malloc(sizeof(char) * (count + 1));
 
     for (int i = 0; i < count; i++) {
@@ -159,24 +181,34 @@ void saveCommand(char *buffer, struct Command *command, int index, int count, in
 
     *(str + count) = '\0';
     
-    if (argc == 1) {
+    if (wordc == 1) {
         command->isBuiltin = malloc(sizeof(int));
         command->isBackground = malloc(sizeof(int));
         command->isStdinRedirection = malloc(sizeof(int));
         command->isStdoutRedirection = malloc(sizeof(int));
-        command->stdinFile = malloc(sizeof(int));
-        command->stdoutFile = malloc(sizeof(int));
+        command->stdinFileArg = malloc(sizeof(int));
+        command->stdoutFileArg = malloc(sizeof(int));
         command->argc = malloc(sizeof(int));
+        command->wordc = malloc(sizeof(int));
         command->argv = malloc(sizeof(char*));
+        command->wordv = malloc(sizeof(char*));
         *(command->isStdinRedirection) = 0;
         *(command->isStdoutRedirection) = 0;
-    } else {
-        command->argv = realloc(command->argv, sizeof(char*) * (argc));
+        *(command->stdinFileArg) = -1;
+        *(command->stdoutFileArg) = -1;
+        command->stdinFile = NULL;
+        command->stdoutFile = NULL;
     }
 
-    command->argv = realloc(command->argv, sizeof(char*) * (argc));
-    *(command->argc) = argc;
-    *(command->argv + argc - 1) = str;
+    if (isCommand) {
+        command->argv = realloc(command->argv, sizeof(char*) * argc);
+        *(command->argc) = argc;
+        *(command->argv + argc - 1) = str;
+    }
+
+    command->wordv = realloc(command->wordv, sizeof(char*) * wordc);
+    *(command->wordc) = wordc;
+    *(command->wordv + wordc - 1) = str;
 }
 
 /*
@@ -188,12 +220,52 @@ void addNullToCommandVector(struct Command *command) {
     *(command->argv + *(command->argc) - 1) = NULL;
 }
 
-void redirectStdin(struct Command *command) {
-    // cat < input.txt
+/*
+ * Redirect stdin to the specified stdout file in the command struct.
+ */
+void redirectStdin(struct Command *command, struct Shell *shell) {
+    if (*(command->stdinFileArg) <= *(command->wordc) &&\
+    isValidFile(*(command->wordv + *(command->stdinFileArg)), "r")) {
+        command->stdinFile = fopen(*(command->wordv + *(command->stdinFileArg)), "r");
+        dup2(fileno(command->stdinFile), STDIN_FILENO);
+    } else {
+        perror("stdin redirection failed");
+        *(shell->status) = 1;
+    }
 }
 
-void redirectStdout(struct Command *command) {
-    // ls > output.txt
+/*
+ * Redirect stdout to the specified stdout file in the command struct.
+ */
+void redirectStdout(struct Command *command, struct Shell *shell) {
+    if (*(command->stdoutFileArg) <= *(command->wordc) &&\
+    isValidFile(*(command->wordv + *(command->stdoutFileArg)), "w")) {
+        command->stdoutFile = fopen(*(command->wordv + *(command->stdoutFileArg)), "w");
+        dup2(fileno(command->stdoutFile), STDOUT_FILENO);
+    } else {
+        perror("stdout redirection failed");
+        *(shell->status) = 1;
+    }
+}
+
+/*
+ *
+ */
+void closeFiles(struct Command *command) {
+    if (*(command->stdinFileArg) != -1) {
+        fclose(command->stdinFile);
+    }
+    if (*(command->stdoutFileArg) != -1) {
+        fclose(command->stdoutFile);
+    }
+}
+
+/*
+ *
+ */
+void resetOutput(struct Shell *shell) {
+    dup2(*(shell->STDIN_FD), STDIN_FILENO);
+    dup2(*(shell->STDOUT_FD), STDOUT_FILENO);
 }
 
 /*
@@ -298,18 +370,20 @@ void runExternalCommand(struct Command *command, struct Shell *shell) {
  * Iterate through the command vector, freeing all char pointers.
  */
 void freeCommand(struct Command *command) {
-    if (command->argc != NULL) {
-        for (int i = 0; i < *(command->argc); i++) {
-            free(*(command->argv + i));
+    if (command->wordc != NULL) {
+        for (int i = 0; i < *(command->wordc); i++) {
+            free(*(command->wordv + i));
         }
         free(command->isBuiltin);
         free(command->isBackground);
         free(command->isStdinRedirection);
         free(command->isStdoutRedirection);
-        free(command->stdinFile);
-        free(command->stdoutFile);
+        free(command->stdinFileArg);
+        free(command->stdoutFileArg);
         free(command->argc);
+        free(command->wordc);
         free(command->argv);
+        free(command->wordv);
     }
     free(command);
 }

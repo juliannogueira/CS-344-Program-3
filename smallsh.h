@@ -13,6 +13,8 @@
 
 struct Shell {
     int *MAX_LENGTH;
+    int *STDIN_FD;
+    int *STDOUT_FD;
     int *isRunning;
     int *status;
     char *cwd;
@@ -24,10 +26,14 @@ struct Command {
     int *isBackground;
     int *isStdinRedirection;
     int *isStdoutRedirection;
-    int *stdinFile;
-    int *stdoutFile;
+    int *stdinFileArg;
+    int *stdoutFileArg;
     int *argc;
+    int *wordc;
     char **argv;
+    char **wordv;
+    FILE *stdinFile;
+    FILE *stdoutFile;
 };
 
 void runShell(void);
@@ -42,13 +48,17 @@ void printCommand(struct Command *command);
 
 void parseCommand(char *buffer, struct Command *command);
 
-void saveCommand(char *buffer, struct Command *command, int index, int count, int argc);
+void saveCommand(char *buffer, struct Command *command, int index, int count, int wordc, int argc, int isCommand);
 
 void addNullToCommandVector(struct Command *command);
 
-void redirectStdin(struct Command *command);
+void redirectStdin(struct Command *command, struct Shell *shell);
 
-void redirectStdout(struct Command *command);
+void redirectStdout(struct Command *command, struct Shell *shell);
+
+void closeFiles(struct Command *command);
+
+void resetOutput(struct Shell *shell);
 
 void setIsBuiltinCommand(struct Command *command);
 
