@@ -84,13 +84,86 @@ void freeShell(struct Shell *shell) {
 }
 
 /*
+ * Redirect stdin to the specified stdout file in the command struct.
+ */
+void redirectStdin(struct Command *command, struct Shell *shell) {
+    if (*(command->stdinFileArg) <= *(command->wordc) &&\
+    isValidFile(*(command->wordv + *(command->stdinFileArg)), "r")) {
+        command->stdinFile = fopen(*(command->wordv + *(command->stdinFileArg)), "r");
+        dup2(fileno(command->stdinFile), STDIN_FILENO);
+    } else {
+        perror("stdin redirection failed");
+        *(shell->status) = 1;
+    }
+}
+
+/*
+ * Redirect stdout to the specified stdout file in the command struct.
+ */
+void redirectStdout(struct Command *command, struct Shell *shell) {
+    if (*(command->stdoutFileArg) <= *(command->wordc) &&\
+    isValidFile(*(command->wordv + *(command->stdoutFileArg)), "w")) {
+        command->stdoutFile = fopen(*(command->wordv + *(command->stdoutFileArg)), "w");
+        dup2(fileno(command->stdoutFile), STDOUT_FILENO);
+    } else {
+        perror("stdout redirection failed");
+        *(shell->status) = 1;
+    }
+}
+
+/*
+ *
+ */
+void closeFiles(struct Command *command) {
+    if (*(command->stdinFileArg) != -1) {
+        fclose(command->stdinFile);
+    }
+    if (*(command->stdoutFileArg) != -1) {
+        fclose(command->stdoutFile);
+    }
+}
+
+/*
+ *
+ */
+void resetOutput(struct Shell *shell) {
+    dup2(*(shell->STDIN_FD), STDIN_FILENO);
+    dup2(*(shell->STDOUT_FD), STDOUT_FILENO);
+}
+
+/*
+ * Check if the command is builtin.
+ *
+ * If the command is builtin, set the respective flag to 1. Otherwise, set it
+ * to 0.
+ */
+void setIsBuiltinCommand(struct Command *command) {
+    char *commands[3] = {"exit", "cd", "status"};
+    *(command->isBuiltin) = 0;
+    for (int i = 0; i < sizeof(commands) / sizeof(char*); i++) {
+        if (isEqualString(*(command->argv), *(commands + i))) {
+            *(command->isBuiltin) = 1;
+            break;
+        }
+    }
+}
+
+/*
  * Initialize a command structure with null values.
  */
 void initCommand(struct Command *command) {
-    command->argc = NULL;
-    command->argv = NULL;
-    command->isBackground = NULL;
     command->isBuiltin = NULL;
+    command->isBackground = NULL;
+    command->isStdinRedirection = NULL;
+    command->isStdoutRedirection = NULL;
+    command->stdinFileArg = NULL;
+    command->stdoutFileArg = NULL;
+    command->wordc = NULL;
+    command->argc = NULL;
+    command->wordv = NULL;
+    command->argv = NULL;
+    command->stdinFile = NULL;
+    command->stdoutFile = NULL;
 }
 
 /*
@@ -196,8 +269,6 @@ void saveCommand(char *buffer, struct Command *command, int index, int count, in
         *(command->isStdoutRedirection) = 0;
         *(command->stdinFileArg) = -1;
         *(command->stdoutFileArg) = -1;
-        command->stdinFile = NULL;
-        command->stdoutFile = NULL;
     }
 
     if (isCommand) {
@@ -221,68 +292,27 @@ void addNullToCommandVector(struct Command *command) {
 }
 
 /*
- * Redirect stdin to the specified stdout file in the command struct.
- */
-void redirectStdin(struct Command *command, struct Shell *shell) {
-    if (*(command->stdinFileArg) <= *(command->wordc) &&\
-    isValidFile(*(command->wordv + *(command->stdinFileArg)), "r")) {
-        command->stdinFile = fopen(*(command->wordv + *(command->stdinFileArg)), "r");
-        dup2(fileno(command->stdinFile), STDIN_FILENO);
-    } else {
-        perror("stdin redirection failed");
-        *(shell->status) = 1;
-    }
-}
-
-/*
- * Redirect stdout to the specified stdout file in the command struct.
- */
-void redirectStdout(struct Command *command, struct Shell *shell) {
-    if (*(command->stdoutFileArg) <= *(command->wordc) &&\
-    isValidFile(*(command->wordv + *(command->stdoutFileArg)), "w")) {
-        command->stdoutFile = fopen(*(command->wordv + *(command->stdoutFileArg)), "w");
-        dup2(fileno(command->stdoutFile), STDOUT_FILENO);
-    } else {
-        perror("stdout redirection failed");
-        *(shell->status) = 1;
-    }
-}
-
-/*
+ * Free all memory in a command struct.
  *
+ * Iterate through the command vector, freeing all char pointers.
  */
-void closeFiles(struct Command *command) {
-    if (*(command->stdinFileArg) != -1) {
-        fclose(command->stdinFile);
-    }
-    if (*(command->stdoutFileArg) != -1) {
-        fclose(command->stdoutFile);
-    }
-}
-
-/*
- *
- */
-void resetOutput(struct Shell *shell) {
-    dup2(*(shell->STDIN_FD), STDIN_FILENO);
-    dup2(*(shell->STDOUT_FD), STDOUT_FILENO);
-}
-
-/*
- * Check if the command is builtin.
- *
- * If the command is builtin, set the respective flag to 1. Otherwise, set it
- * to 0.
- */
-void setIsBuiltinCommand(struct Command *command) {
-    char *commands[3] = {"exit", "cd", "status"};
-    *(command->isBuiltin) = 0;
-    for (int i = 0; i < sizeof(commands) / sizeof(char*); i++) {
-        if (isEqualString(*(command->argv), *(commands + i))) {
-            *(command->isBuiltin) = 1;
-            break;
+void freeCommand(struct Command *command) {
+    if (command->wordc != NULL) {
+        for (int i = 0; i < *(command->wordc); i++) {
+            free(*(command->wordv + i));
         }
+        free(command->isBuiltin);
+        free(command->isBackground);
+        free(command->isStdinRedirection);
+        free(command->isStdoutRedirection);
+        free(command->stdinFileArg);
+        free(command->stdoutFileArg);
+        free(command->argc);
+        free(command->wordc);
+        free(command->argv);
+        free(command->wordv);
     }
+    free(command);
 }
 
 /*
@@ -362,28 +392,4 @@ void runExternalCommand(struct Command *command, struct Shell *shell) {
             pid = waitpid(pid, shell->status, 0);
             break;
     }
-}
-
-/*
- * Free all memory in a command struct.
- *
- * Iterate through the command vector, freeing all char pointers.
- */
-void freeCommand(struct Command *command) {
-    if (command->wordc != NULL) {
-        for (int i = 0; i < *(command->wordc); i++) {
-            free(*(command->wordv + i));
-        }
-        free(command->isBuiltin);
-        free(command->isBackground);
-        free(command->isStdinRedirection);
-        free(command->isStdoutRedirection);
-        free(command->stdinFileArg);
-        free(command->stdoutFileArg);
-        free(command->argc);
-        free(command->wordc);
-        free(command->argv);
-        free(command->wordv);
-    }
-    free(command);
 }

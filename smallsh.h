@@ -36,21 +36,15 @@ struct Command {
     FILE *stdoutFile;
 };
 
+/*
+ * The following functions relate to shell activities.
+ */
+
 void runShell(void);
 
 void initShell(struct Shell *shell, int MAX_LENGTH);
 
 void freeShell(struct Shell *shell);
-
-void initCommand(struct Command *command);
-
-void printCommand(struct Command *command);
-
-void parseCommand(char *buffer, struct Command *command);
-
-void saveCommand(char *buffer, struct Command *command, int index, int count, int wordc, int argc, int isCommand);
-
-void addNullToCommandVector(struct Command *command);
 
 void redirectStdin(struct Command *command, struct Shell *shell);
 
@@ -62,6 +56,26 @@ void resetOutput(struct Shell *shell);
 
 void setIsBuiltinCommand(struct Command *command);
 
+/*
+ * The following functions relate to parsing and assigning commands.
+ */
+
+void initCommand(struct Command *command);
+
+void printCommand(struct Command *command);
+
+void parseCommand(char *buffer, struct Command *command);
+
+void saveCommand(char *buffer, struct Command *command, int index, int count, int wordc, int argc, int isCommand);
+
+void addNullToCommandVector(struct Command *command);
+
+void freeCommand(struct Command *command);
+
+/*
+ * The following functions relate to running commands.
+ */
+
 void runBuiltinCommand(struct Command *command, struct Shell *shell);
 
 void runBuiltinCommandExit(struct Command *command, struct Shell *shell);
@@ -71,7 +85,5 @@ void runBuiltinCommandCd(struct Command *command, struct Shell *shell);
 void runBuiltinCommandStatus(struct Command *command, struct Shell *shell);
 
 void runExternalCommand(struct Command *command, struct Shell *shell);
-
-void freeCommand(struct Command *command);
 
 #endif
