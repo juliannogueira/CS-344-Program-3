@@ -2,6 +2,7 @@
 #define SMALLSH_H
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <signal.h>
 #include <sys/signal.h>
 #include <sys/wait.h>
@@ -10,6 +11,8 @@
 /*
  *
  */
+
+int g_isPreventingBackgroundProcess;
 
 struct Shell {
     int **backgroundPids;
@@ -23,6 +26,7 @@ struct Shell {
     int *pid;
     char *cwd;
     char *HOME;
+    char *devNull;
 };
 
 struct Command {
@@ -30,6 +34,7 @@ struct Command {
     int *isBackground;
     int *isStdinRedirection;
     int *isStdoutRedirection;
+    int *isFailedRedirection;
     int *stdinFileArg;
     int *stdoutFileArg;
     int *argc;
@@ -62,7 +67,7 @@ void resetOutput(struct Shell *shell);
 
 void setIsBuiltinCommand(struct Command *command);
 
-void setIsBackgroundCommand(struct Command *command);
+void setIsBackgroundCommand(struct Command *command, struct Shell *shell);
 
 /*
  * The following functions relate to parsing and assigning commands.
@@ -97,5 +102,13 @@ void runBuiltinCommandStatus(struct Command *command, struct Shell *shell);
 void runExternalCommandForeground(struct Command *command, struct Shell *shell);
 
 void runExternalCommandBackground(struct Command *command, struct Shell *shell);
+
+/*
+ * The following functions relate to signals.
+ */
+
+void installSignals(void);
+
+void handle_SIGTSTP(int signal);
 
 #endif

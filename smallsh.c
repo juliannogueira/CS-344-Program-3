@@ -14,12 +14,13 @@ void runShell(void) {
     struct Shell *shell;
     struct Command *command;
     shell = malloc(sizeof(struct Shell));
+    g_isPreventingBackgroundProcess = 0;
+
+
     initShell(shell, MAX_LENGTH);
+    installSignals();
 
     while (*(shell->isRunning)) {
-        if (*(shell->isRunningBackgroundProcess)) {
-            checkBackgroundPids(shell);
-        }
         command = malloc(sizeof(struct Command));
         initCommand(command);
         getUserInput(prompt, buffer, MAX_LENGTH);
@@ -27,26 +28,25 @@ void runShell(void) {
         if (command->wordc != NULL) {
             addNullToCommandVector(command);
             setIsBuiltinCommand(command);
-            setIsBackgroundCommand(command);
-            if (*(command->isStdinRedirection)) {
-                redirectStdin(command, shell);
-            }
-            if (*(command->isStdoutRedirection)) {
-                redirectStdout(command, shell);
-            }
-            if (*(command->isBuiltin)) {
-                runBuiltinCommand(command, shell);
-            } else {
-                if (*(command->isBackground)) {
-                    runExternalCommandBackground(command, shell);
+            setIsBackgroundCommand(command, shell);
+            redirectStdin(command, shell);
+            redirectStdout(command, shell);
+            if (!*(command->isFailedRedirection)){
+                if (*(command->isBuiltin)) {
+                    runBuiltinCommand(command, shell);
                 } else {
-                    runExternalCommandForeground(command, shell);
+                    if (*(command->isBackground)) {
+                        runExternalCommandBackground(command, shell);
+                    } else {
+                        runExternalCommandForeground(command, shell);
+                    }
                 }
             }
             closeFiles(command);
             resetOutput(shell);
-            // printCommand(command);
-            // printf("cwd: %s\n", shell->cwd);
+        }
+        if (*(shell->isRunningBackgroundProcess)) {
+            checkBackgroundPids(shell);
         }
         freeCommand(command);
     }
@@ -81,6 +81,7 @@ void initShell(struct Shell *shell, int MAX_LENGTH) {
     *(shell->status) = 0;
     *(shell->pid) = getpid();
     shell->cwd = getcwd(shell->cwd, MAX_LENGTH);
+    shell->devNull = "/dev/null";
     copyString(temp, shell->HOME);
 }
 
@@ -122,7 +123,7 @@ void checkBackgroundPids(struct Shell *shell) {
         if (pid) {
             *(shell->status) = status;
             *(shell->backgroundPidCount) -= 1;
-            printf("background pid %d returned with signal %d\n", pid, *(shell->status));
+            printf("background pid %d returned with exit value %d\n", pid, *(shell->status));
             free(*(shell->backgroundPids + i));
         } else {
             temp[index] = *(*(shell->backgroundPids + i));
@@ -150,13 +151,21 @@ void checkBackgroundPids(struct Shell *shell) {
  * Redirect stdin to the specified stdout file in the command struct.
  */
 void redirectStdin(struct Command *command, struct Shell *shell) {
-    if (*(command->stdinFileArg) <= *(command->wordc) &&\
-    isValidFile(*(command->wordv + *(command->stdinFileArg)), "r")) {
-        command->stdinFile = fopen(*(command->wordv + *(command->stdinFileArg)), "r");
-        dup2(fileno(command->stdinFile), STDIN_FILENO);
+    if (*(command->isStdinRedirection)) {
+        if (*(command->stdinFileArg) <= *(command->wordc) &&\
+        isValidFile(*(command->wordv + *(command->stdinFileArg)), "r")) {
+            command->stdinFile = fopen(*(command->wordv + *(command->stdinFileArg)), "r");
+            dup2(fileno(command->stdinFile), STDIN_FILENO);
+        } else {
+            perror("stdin redirection failed");
+            *(command->isFailedRedirection) = 1;
+            *(shell->status) = 1;
+        }
     } else {
-        perror("stdin redirection failed");
-        *(shell->status) = 1;
+        if (*(command->isBackground)) {
+            command->stdinFile = fopen(shell->devNull, "r");
+            dup2(fileno(command->stdinFile), STDIN_FILENO);
+        }
     }
 }
 
@@ -164,13 +173,21 @@ void redirectStdin(struct Command *command, struct Shell *shell) {
  * Redirect stdout to the specified stdout file in the command struct.
  */
 void redirectStdout(struct Command *command, struct Shell *shell) {
-    if (*(command->stdoutFileArg) <= *(command->wordc) &&\
-    isValidFile(*(command->wordv + *(command->stdoutFileArg)), "w")) {
-        command->stdoutFile = fopen(*(command->wordv + *(command->stdoutFileArg)), "w");
-        dup2(fileno(command->stdoutFile), STDOUT_FILENO);
+    if (*(command->isStdoutRedirection)) {
+        if (*(command->stdoutFileArg) <= *(command->wordc) &&\
+        isValidFile(*(command->wordv + *(command->stdoutFileArg)), "w")) {
+            command->stdoutFile = fopen(*(command->wordv + *(command->stdoutFileArg)), "w");
+            dup2(fileno(command->stdoutFile), STDOUT_FILENO);
+        } else {
+            perror("stdout redirection failed");
+            *(command->isFailedRedirection) = 1;
+            *(shell->status) = 1;
+        }
     } else {
-        perror("stdout redirection failed");
-        *(shell->status) = 1;
+        if (*(command->isBackground)) {
+            command->stdoutFile = fopen(shell->devNull, "w");
+            dup2(fileno(command->stdoutFile), STDOUT_FILENO);
+        }
     }
 }
 
@@ -178,11 +195,13 @@ void redirectStdout(struct Command *command, struct Shell *shell) {
  *
  */
 void closeFiles(struct Command *command) {
-    if (*(command->stdinFileArg) != -1) {
-        fclose(command->stdinFile);
-    }
-    if (*(command->stdoutFileArg) != -1) {
-        fclose(command->stdoutFile);
+    if (!*(command->isFailedRedirection)) {
+        if (*(command->stdinFileArg) != -1) {
+            fclose(command->stdinFile);
+        }
+        if (*(command->stdoutFileArg) != -1) {
+            fclose(command->stdoutFile);
+        }
     }
 }
 
@@ -214,10 +233,12 @@ void setIsBuiltinCommand(struct Command *command) {
 /*
  *
  */
-void setIsBackgroundCommand(struct Command *command) {
+void setIsBackgroundCommand(struct Command *command, struct Shell *shell) {
     if (isEqualString(*(command->argv + *(command->argc) - 2), "&")) {
+        if (!g_isPreventingBackgroundProcess) {
+            *(command->isBackground) = 1;
+        }
         *(command->argv + *(command->argc) - 2) = NULL;
-        *(command->isBackground) = 1;
     }
 }
 
@@ -229,6 +250,7 @@ void initCommand(struct Command *command) {
     command->isBackground = NULL;
     command->isStdinRedirection = NULL;
     command->isStdoutRedirection = NULL;
+    command->isFailedRedirection = NULL;
     command->stdinFileArg = NULL;
     command->stdoutFileArg = NULL;
     command->wordc = NULL;
@@ -417,6 +439,7 @@ void saveCommand(char *buffer, struct Command *command, struct Shell *shell, int
         command->isBackground = malloc(sizeof(int));
         command->isStdinRedirection = malloc(sizeof(int));
         command->isStdoutRedirection = malloc(sizeof(int));
+        command->isFailedRedirection = malloc(sizeof(int));
         command->stdinFileArg = malloc(sizeof(int));
         command->stdoutFileArg = malloc(sizeof(int));
         command->argc = malloc(sizeof(int));
@@ -427,6 +450,7 @@ void saveCommand(char *buffer, struct Command *command, struct Shell *shell, int
         *(command->isBackground) = 0;
         *(command->isStdinRedirection) = 0;
         *(command->isStdoutRedirection) = 0;
+        *(command->isFailedRedirection) = 0;
         *(command->stdinFileArg) = -1;
         *(command->stdoutFileArg) = -1;
     }
@@ -467,6 +491,7 @@ void freeCommand(struct Command *command) {
         free(command->isBackground);
         free(command->isStdinRedirection);
         free(command->isStdoutRedirection);
+        free(command->isFailedRedirection);
         free(command->stdinFileArg);
         free(command->stdoutFileArg);
         free(command->argc);
@@ -500,11 +525,13 @@ void runBuiltinCommand(struct Command *command, struct Shell *shell) {
  */
 void runBuiltinCommandExit(struct Command *command, struct Shell *shell) {
     *(shell->isRunning) = 0;
-    printf("pids running in background: %d\n", *(shell->backgroundPidCount));
-    for (int i = 0; i < *(shell->backgroundPidCount); i++) {
-        printf("killing pid %d\n", *(*(shell->backgroundPids + i)));
-        if (*(*(shell->backgroundPids + i))) {
-            kill(*(*(shell->backgroundPids + i)), SIGKILL);
+    if (*(shell->backgroundPidCount)) {
+        printf("pids running in background: %d\n", *(shell->backgroundPidCount));
+        for (int i = 0; i < *(shell->backgroundPidCount); i++) {
+            printf("killing pid %d\n", *(*(shell->backgroundPids + i)));
+            if (*(*(shell->backgroundPids + i))) {
+                kill(*(*(shell->backgroundPids + i)), SIGKILL);
+            }
         }
     }
 }
@@ -551,14 +578,20 @@ void runExternalCommandForeground(struct Command *command, struct Shell *shell) 
             perror("fork()");
             break;
         case 0:
+            signal(SIGINT, SIG_DFL);
+            signal(SIGTSTP, SIG_IGN);
             execvp(*(command->argv), command->argv);
             perror("execvp()");
+            resetOutput(shell);
             freeCommand(command);
             freeShell(shell);
             kill(getpid(), SIGKILL);
             break;
         default:
             pid = waitpid(pid, shell->status, 0);
+            if (WIFSIGNALED(*(shell->status))) {
+                printf("pid %d terminated by signal %d\n", pid, *(shell->status));
+            }
             break;
     }
 }
@@ -576,8 +609,10 @@ void runExternalCommandBackground(struct Command *command, struct Shell *shell) 
             perror("fork()");
             break;
         case 0:
+            signal(SIGTSTP, SIG_IGN);
             execvp(*(command->argv), command->argv);
             perror("execvp()");
+            resetOutput(shell);
             freeCommand(command);
             freeShell(shell);
             kill(getpid(), SIGKILL);
@@ -607,4 +642,39 @@ void runExternalCommandBackground(struct Command *command, struct Shell *shell) 
             *(shell->isRunningBackgroundProcess) = 1;
             break;
     }
+}
+
+/*
+ *
+ */
+void installSignals() {
+    struct sigaction SIGINT_action = {0};
+    struct sigaction SIGTSTP_action = {0};
+
+    SIGINT_action.sa_handler = SIG_IGN;
+    SIGTSTP_action.sa_handler = handle_SIGTSTP;
+
+    sigfillset(&SIGINT_action.sa_mask);
+    sigfillset(&SIGTSTP_action.sa_mask);
+
+    SIGINT_action.sa_flags = 0;
+    SIGTSTP_action.sa_flags = SA_RESTART;
+
+    sigaction(SIGINT, &SIGINT_action, NULL);
+    sigaction(SIGTSTP, &SIGTSTP_action, NULL);
+}
+
+/*
+ *
+ */
+void handle_SIGTSTP(int signal) {
+    char *message;
+    if (g_isPreventingBackgroundProcess) {
+        g_isPreventingBackgroundProcess = 0;
+        message = "\nExiting foreground-only mode";
+    } else {
+        g_isPreventingBackgroundProcess = 1;
+        message = "\nEntering foreground-only mode (& is now ignored)";
+    }
+    write(STDOUT_FILENO, message, stringLength(message));
 }
